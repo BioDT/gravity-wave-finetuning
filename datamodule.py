@@ -1,10 +1,12 @@
-import glob
+from glob import glob
 import os
 import torch
+from pathlib import Path
 import xarray as xr
 from torch.utils.data import DataLoader, Dataset
 from torch.utils.data.distributed import DistributedSampler
-
+import json
+from datetime import datetime
 
 def get_era5_uvtp122(ds: xr.Dataset, index: int = 0) -> dict[str, torch.Tensor]:
     """Retrieve climate data variables at 122 pressure levels.
@@ -47,6 +49,204 @@ def get_era5_uvtp122(ds: xr.Dataset, index: int = 0) -> dict[str, torch.Tensor]:
         "target": tensor_y,
         "lead_time": torch.zeros(1),  # Placeholder for lead time
     }
+
+class GeoLifeCLEFSpeciesDataset(Dataset):
+    def __init__(
+        self,
+        data_dir: str,
+        num_species: int = 500,
+        unnormalize: bool = False,
+        geo_size = (64, 128),
+        ):
+        self.data_dir = data_dir
+        self.num_species = num_species
+        self.unnormalize = unnormalize
+        self.geo_size = geo_size
+        stats_file = "data/finetune/geolifeclef24/aurorashape_species/stats.json"
+        with open(stats_file) as f:
+            self.stats = json.load(f)
+        self.files = glob(str(Path(self.data_dir) / "*.pt"))
+        self.files = sorted(self.files)
+
+    def __len__(self):
+        return len(self.files)
+
+    def __getitem__(self, idx):
+        fpath = self.files[idx]
+        data = torch.load(fpath, map_location="cpu", weights_only=False)
+        
+        lat = data["metadata"]["lat_patch"]
+        lon = data["metadata"]["lon_patch"]
+        nbatch = len(data)
+        # print("Len of batch", nbatch)
+        # self.lat = torch.linspace(start=90, end=-90, steps=self.geo_size[0])
+        # self.lon = torch.linspace(0, 360, self.geo_size[1] + 1)[:-1]
+        # print(lat, lon)
+        self.lat = torch.tensor(lat)
+        self.lon = torch.tensor(lon)
+        # print(f"len lat {len(self.lat)}, lon {len(self.lon)}")
+
+        # Calculate static surface variables (latitude and longitude in radians)
+        latitudes = self.lat / 360 * 2.0 * torch.pi
+        longitudes = self.lon / 360 * 2.0 * torch.pi
+
+        # Create a meshgrid of latitudes and longitudes
+        latitudes, longitudes = torch.meshgrid(
+            torch.as_tensor(latitudes), torch.as_tensor(longitudes), indexing="ij"
+        )
+        # Stack sine and cosine of latitude and longitude to create static surface tensor
+        self.sur_static = torch.stack(
+            [torch.sin(latitudes), torch.cos(longitudes), torch.sin(longitudes)], axis=0
+        )
+
+        species_distribution = data["patch"] # [T=2, C=500, H=64, W=128]
+        # print(species_distribution.shape)
+        # print(f"Timestap of patch {species_distribution.shape[0]}")
+        # [T, S, H, W]
+        # H = species_distribution.shape[2]
+        # W = species_distribution.shape[3]
+        species_distribution = self.scale_species_distribution(species_distribution, unnormalize=self.unnormalize)
+        assert (
+            species_distribution.shape[1] == self.num_species
+        ), f"species_distribution.shape[1]={species_distribution.shape[1]}, self.num_species={self.num_species}"
+
+        # target = torch.randn(self.num_species, H, W)
+        x = species_distribution[0, :, :, :] # [500, 152, 320] T=0 => [500, 64, 128]
+        target = species_distribution[1, :, :, :] # [500, 152, 320] T=1  -> We crop to geo_size = (64,128) => Patches that Prithvi requires
+
+        # lead_time = torch.empty((nbatch,), dtype=torch.float32)
+        # input_time = torch.empty((nbatch,), dtype=torch.float32)
+        lead_time = torch.tensor(6, dtype=torch.float32)
+        input_time = torch.tensor(-6, dtype=torch.float32)
+        # print("Target shape dataset", target.shape)
+
+        return {"x": x.unsqueeze(0),
+                "y": x,
+                 "target": target,
+                 "lead_time": lead_time, #torch.zeros(1),
+                 "input_time": input_time,
+                 "static": self.sur_static,
+                 "lat_original": data["metadata"]["lat_array"],
+                 "lon_original": data["metadata"]["lon_array"]
+                 }
+    
+    def scale_batch(self, batch: dict, unnormalize: bool = False):
+        # TODO: check this function
+        species_distribution = batch.surf_vars["species_distribution"]
+        species_distribution = self.scale_species_distribution(species_distribution, unnormalize=unnormalize)
+        batch.surf_vars["species_distribution"] = species_distribution
+
+    def scale_species_distribution(self, species_distribution: torch.Tensor, unnormalize: bool = False) -> torch.Tensor:
+        # TODO: check this function
+        # print("Species distribution shape in scale", species_distribution.shape) # [T, S, H, W]
+        for species_i in range(species_distribution.shape[1]):
+            stats_species = self.stats[species_i]
+            row = species_distribution[:, species_i, :, :]
+            if unnormalize:
+                row = row * stats_species["std"] + stats_species["mean"]
+            else:
+                row = (row - stats_species["mean"]) / stats_species["std"]
+            species_distribution[:, species_i, :, :] = row
+        return species_distribution
+    
+
+
+class GeoLifeCLEFSpeciesDatasetOLD(Dataset):
+    def __init__(
+        self,
+        data_dir: str,
+        num_species: int = 500,
+        unnormalize: bool = False,
+        geo_size = (64, 128),
+        ):
+        self.data_dir = data_dir
+        self.num_species = num_species
+        self.unnormalize = unnormalize
+        self.geo_size = geo_size
+        stats_file = "data/finetune/geolifeclef24/aurorashape_species/stats.json"
+        with open(stats_file) as f:
+            self.stats = json.load(f)
+        self.files = glob(str(Path(self.data_dir) / "*.pt"))
+        self.files = sorted(self.files)
+
+    def __len__(self):
+        return len(self.files)
+
+    def __getitem__(self, idx):
+        fpath = self.files[idx]
+        data = torch.load(fpath, map_location="cpu", weights_only=True)
+        
+        lat = data["metadata"]["lat"]
+        lon = data["metadata"]["lon"]
+        nbatch = len(data)
+        # print("Len of batch", nbatch)
+        # self.lat = torch.linspace(start=90, end=-90, steps=self.geo_size[0])
+        # self.lon = torch.linspace(0, 360, self.geo_size[1] + 1)[:-1]
+        # print(lat, lon)
+        self.lat = torch.tensor(lat[:self.geo_size[0]])
+        self.lon = torch.tensor(lon[:self.geo_size[1]])
+        # print(self.lat)
+
+        # Calculate static surface variables (latitude and longitude in radians)
+        latitudes = self.lat / 360 * 2.0 * torch.pi
+        longitudes = self.lon / 360 * 2.0 * torch.pi
+
+        # Create a meshgrid of latitudes and longitudes
+        latitudes, longitudes = torch.meshgrid(
+            torch.as_tensor(latitudes), torch.as_tensor(longitudes), indexing="ij"
+        )
+        # Stack sine and cosine of latitude and longitude to create static surface tensor
+        self.sur_static = torch.stack(
+            [torch.sin(latitudes), torch.cos(longitudes), torch.sin(longitudes)], axis=0
+        )
+
+        species_distribution = data["species_distribution"]
+        print("Species distribution shape", species_distribution.shape)
+        # [T, S, H, W]
+        H = species_distribution.shape[2]
+        W = species_distribution.shape[3]
+        species_distribution = self.scale_species_distribution(species_distribution, unnormalize=self.unnormalize)
+        assert (
+            species_distribution.shape[1] == self.num_species
+        ), f"species_distribution.shape[1]={species_distribution.shape[1]}, self.num_species={self.num_species}"
+        surf_vars = {"species_distribution": species_distribution}
+
+        # target = torch.randn(self.num_species, H, W)
+        x = species_distribution[0, :, :self.geo_size[0], :self.geo_size[1]] # [500, 152, 320] T=0 => [500, 64, 128]
+        target = species_distribution[1, :, :self.geo_size[0], :self.geo_size[1]] # [500, 152, 320] T=1  -> We crop to geo_size = (64,128) => Patches that Prithvi requires
+
+        # lead_time = torch.empty((nbatch,), dtype=torch.float32)
+        # input_time = torch.empty((nbatch,), dtype=torch.float32)
+        lead_time = torch.tensor(6, dtype=torch.float32)
+        input_time = torch.tensor(-6, dtype=torch.float32)
+        # print("Target shape dataset", target.shape)
+        return {"x": x.unsqueeze(0),
+                "y": x,
+                 "target": target,
+                 "lead_time": lead_time, #torch.zeros(1),
+                 "input_time": input_time,
+                 "static": self.sur_static,
+                 "lat_original": lat,
+                 "lon_original": lon}
+    
+    def scale_batch(self, batch: dict, unnormalize: bool = False):
+        # TODO: check this function
+        species_distribution = batch.surf_vars["species_distribution"]
+        species_distribution = self.scale_species_distribution(species_distribution, unnormalize=unnormalize)
+        batch.surf_vars["species_distribution"] = species_distribution
+
+    def scale_species_distribution(self, species_distribution: torch.Tensor, unnormalize: bool = False) -> torch.Tensor:
+        # TODO: check this function
+        # print("Species distribution shape in scale", species_distribution.shape) # [T, S, H, W]
+        for species_i in range(species_distribution.shape[1]):
+            stats_species = self.stats[species_i]
+            row = species_distribution[:, species_i, :, :]
+            if unnormalize:
+                row = row * stats_species["std"] + stats_species["mean"]
+            else:
+                row = (row - stats_species["mean"]) / stats_species["std"]
+            species_distribution[:, species_i, :, :] = row
+        return species_distribution
 
 
 class ERA5Dataset(Dataset):
@@ -134,7 +334,7 @@ class ERA5Dataset(Dataset):
         return batch
 
 
-class ERA5DataModule:
+class GeoCLEFDataModule:
     """
     This module handles data loading, batching, and train/validation splits.
 
@@ -148,9 +348,8 @@ class ERA5DataModule:
 
     def __init__(
         self,
-        train_data_path: str = "data/uvtp122",
-        valid_data_path: str = "data/uvtp122",
-        file_glob_pattern: str = "wxc_input_u_v_t_p_output_theta_uw_vw_*.nc",
+        train_data_path: str = "data/finetune/geolifeclef24/aurorashape_species/train",
+        valid_data_path: str = "data/finetune/geolifeclef24/aurorashape_species/val",
         batch_size: int = 16,
         num_data_workers: int = 8,
     ):
@@ -166,10 +365,14 @@ class ERA5DataModule:
         super().__init__()
         self.train_data_path = train_data_path
         self.valid_data_path = valid_data_path
-        self.file_glob_pattern = file_glob_pattern
 
         self.batch_size: int = batch_size
         self.num_workers: int = num_data_workers
+
+        stats_file = "data/finetune/geolifeclef24/aurorashape_species/stats.json"
+        with open(stats_file) as f:
+            self.stats = json.load(f)
+
 
     def setup(self, stage: str | None = None) -> tuple[Dataset, Dataset]:
         """Sets up the datasets for different stages
@@ -179,17 +382,14 @@ class ERA5DataModule:
             stage: Stage for which the setup is performed ("fit", "predict").
         """
         if stage == "fit":
-            self.dataset_train = ERA5Dataset(
-                data_path=self.train_data_path, file_glob_pattern=self.file_glob_pattern
-            )
-            self.dataset_val = ERA5Dataset(
-                data_path=self.valid_data_path, file_glob_pattern=self.file_glob_pattern
-            )
+            self.dataset_train = GeoLifeCLEFSpeciesDataset(
+                data_dir=self.train_data_path)
+            self.dataset_val = GeoLifeCLEFSpeciesDataset(
+                data_dir=self.valid_data_path)
         elif stage == "predict":
-            self.dataset_predict = ERA5Dataset(
-                data_path=self.valid_data_path, file_glob_pattern=self.file_glob_pattern
-            )
-
+            self.dataset_predict = GeoLifeCLEFSpeciesDataset(
+                data_dir=self.valid_data_path)
+            
     def train_dataloader(self) -> DataLoader:
         """Returns a DataLoader for the training data."""
         return DataLoader(
@@ -219,3 +419,23 @@ class ERA5DataModule:
             shuffle=False,
             num_workers=self.num_workers,
         )
+    
+    def scale_batch(self, batch: dict, unnormalize: bool = False):
+        # TODO: check this function
+        species_distribution = batch.surf_vars["species_distribution"]
+        species_distribution = self.scale_species_distribution(species_distribution, unnormalize=unnormalize)
+        batch.surf_vars["species_distribution"] = species_distribution
+
+    def scale_species_distribution(self, species_distribution: torch.Tensor, unnormalize: bool = False) -> torch.Tensor:
+        # TODO: check this function
+        # print("Species distribution shape in scale", species_distribution.shape) # [T, S, H, W]
+        for species_i in range(species_distribution.shape[1]):
+            stats_species = self.stats[species_i]
+            row = species_distribution[:, species_i, :, :]
+            if unnormalize:
+                row = row * stats_species["std"] + stats_species["mean"]
+            else:
+                row = (row - stats_species["mean"]) / stats_species["std"]
+            species_distribution[:, species_i, :, :] = row
+        return species_distribution
+    

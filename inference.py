@@ -1,21 +1,126 @@
 import argparse
 import os
-
+from pathlib import Path
 import numpy as np
 import torch
 import torch.nn.functional as F
 import tqdm
 import xarray as xr
 
-from datamodule import ERA5DataModule
+from datamodule import GeoCLEFDataModule
 from gravity_wave_model import UNetWithTransformer
 from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.distributed as dist
 
-local_rank = int(os.environ["LOCAL_RANK"])
-rank = int(os.environ["RANK"])
+from plots import plot_eval, plot_comparisons
+
+import matplotlib.pyplot as plt
+import cartopy.crs as ccrs
+from matplotlib.colors import TwoSlopeNorm
+
+
+# local_rank = int(os.environ["LOCAL_RANK"])
+local_rank = 0
+# rank = int(os.environ["RANK"])
+# rank = 0
 device = f"cuda:{local_rank}"
 dtype = torch.float32
+
+
+def stitch_and_plot(patch_outputs: list, lat_full: np.ndarray, lon_full: np.ndarray,
+                    vertical_anchor: str = "center", horizontal_anchor: str = "center",
+                    lat_ascending: bool = True, patch_lat_size: int = 64, patch_lon_size: int = 128):
+    """
+    Given a list of 4 patch predictions (each with shape [1, 500, 64, 128]),
+    stitches them together and plots the stitched prediction overlay on top of the full map.
+    
+    The full grid is assumed to be 152 (lat) x 320 (lon). The anchor parameters are used
+    to compute the starting indices for the cropped region.
+    
+    Parameters:
+      patch_outputs: list of 4 tensors, each with shape [1, S, patch_lat_size, patch_lon_size].
+      lat_full: full latitude array (length 152)
+      lon_full: full longitude array (length 320)
+      vertical_anchor: one of {"top", "center", "bottom"}
+      horizontal_anchor: one of {"left", "center", "right"}
+      lat_ascending: if True, the latitude array is in increasing order.
+    
+    Returns:
+      stitched_data: tensor of shape [S, 2*patch_lat_size, 2*patch_lon_size]
+                     (e.g. [500, 128, 256])
+    """
+    # Convert to NumPy arrays and squeeze to ensure 1D.
+    lat_full = np.asarray(lat_full).squeeze()
+    lon_full = np.asarray(lon_full).squeeze()
+    full_H, full_W = 152, 320
+    crop_height = 2 * patch_lat_size  # 128
+    crop_width  = 2 * patch_lon_size   # 256
+
+    # Compute row_start based on vertical_anchor:
+    if vertical_anchor == "center":
+        row_start = (full_H - crop_height) // 2
+    elif vertical_anchor == "bottom":
+        row_start = 0 if lat_ascending else full_H - crop_height
+    elif vertical_anchor == "top":
+        row_start = full_H - crop_height if lat_ascending else 0
+    else:
+        raise ValueError("vertical_anchor must be 'top', 'center' or 'bottom'.")
+
+    # Compute col_start based on horizontal_anchor:
+    if horizontal_anchor == "center":
+        col_start = (full_W - crop_width) // 2
+    elif horizontal_anchor == "left":
+        col_start = 0
+    elif horizontal_anchor == "right":
+        col_start = full_W - crop_width
+    else:
+        raise ValueError("horizontal_anchor must be 'left', 'center' or 'right'.")
+
+    # Remove batch dimension (assuming each patch is [1, S, 64, 128])
+    def squeeze_patch(p):
+        return p[0] if p.ndim == 4 else p
+
+    patch0 = squeeze_patch(patch_outputs[0])  # top-left: [S, 64, 128]
+    patch1 = squeeze_patch(patch_outputs[1])  # top-right: [S, 64, 128]
+    patch2 = squeeze_patch(patch_outputs[2])  # bottom-left: [S, 64, 128]
+    patch3 = squeeze_patch(patch_outputs[3])  # bottom-right: [S, 64, 128]
+
+    # Stitch patches along width and height.
+    top_row = torch.cat([patch0, patch1], dim=-1)      # shape [S, 64, 256]
+    bottom_row = torch.cat([patch2, patch3], dim=-1)    # shape [S, 64, 256]
+    stitched_data = torch.cat([top_row, bottom_row], dim=-2)  # shape [S, 128, 256]
+
+    # Now, compute the geographic coordinates for the cropped (stitched) region.
+    # We assume that lat_full and lon_full are one-dimensional arrays.
+    lat_full = np.asarray(lat_full)
+    lon_full = np.asarray(lon_full)
+    sub_lat = lat_full[row_start : row_start + crop_height]
+    sub_lon = lon_full[col_start : col_start + crop_width]
+
+    # For plotting, select one channel (e.g., channel 0).
+    channel_to_plot = 0
+    data_for_plot = stitched_data.detach().cpu()[channel_to_plot].numpy()  # shape (128, 256)
+
+    fig, ax = plt.subplots(subplot_kw={'projection': ccrs.PlateCarree()}, figsize=(10, 6))
+    # Make sure to pass scalar floats
+    print("lon_ful ", lon_full, "\n lat full", lat_full)
+    ax.set_extent([float(lon_full[0]), float(lon_full[-1]), float(lat_full[0]), float(lat_full[-1])],
+                  crs=ccrs.PlateCarree())
+    ax.coastlines(resolution="50m")
+    ax.set_title("Stitched Prediction Overlay")
+    
+    Lon_grid, Lat_grid = np.meshgrid(sub_lon, sub_lat)
+    norm = TwoSlopeNorm(vmin=data_for_plot.min(), vcenter=0, vmax=data_for_plot.max())
+    cf = ax.contourf(Lon_grid, Lat_grid, data_for_plot, levels=60, cmap='RdBu_r',
+                     norm=norm, alpha=0.6, transform=ccrs.PlateCarree())
+    # Optionally add a rectangle indicating the cropped area
+
+
+    fig.colorbar(cf, ax=ax, orientation="vertical", label="Prediction Value")
+    plt.tight_layout()
+    plt.savefig("results/species_distributions/inference.png")
+    plt.show()
+    return stitched_data, row_start, col_start
 
 def setup():
     dist.init_process_group("nccl")
@@ -47,12 +152,12 @@ def load_checkpoint(model,ckpt_singular):
     print('Loaded weights')
     return model
 
-def get_model(cfg, vartype,ckpt_singular: str) -> torch.nn.Module:
+def get_model(cfg, vartype, ckpt_singular: str) -> torch.nn.Module:
     model: torch.nn.Module = UNetWithTransformer(
         lr=cfg.lr,
         hidden_channels=cfg.hidden_channels,
-        in_channels={"uvtheta122": 366, "uvtp122": 488, "uvtp14": 56}[vartype],
-        out_channels={"uvtheta122": 244, "uvtp122": 366, "uvtp14": 42}[vartype],
+        in_channels=500,
+        out_channels=500,
         n_lats_px=cfg.n_lats_px,
         n_lons_px=cfg.n_lons_px,
         in_channels_static=cfg.in_channels_static,
@@ -61,34 +166,29 @@ def get_model(cfg, vartype,ckpt_singular: str) -> torch.nn.Module:
         device=device,
     )
     model = DDP(model.to(local_rank, dtype=dtype), device_ids=[local_rank])
-    model = load_checkpoint(model,ckpt_singular)
+    model = load_checkpoint(model, ckpt_singular)
 
     return model
 
-def get_data(data_path: str, file_glob_pattern: str) -> torch.utils.data.DataLoader:
-    datamodule = ERA5DataModule(
-        batch_size=8,
-        num_data_workers=8,
+def get_data(data_path: str) -> torch.utils.data.DataLoader:
+    datamodule = GeoCLEFDataModule(
+        batch_size=1,
+        num_data_workers=1,
         train_data_path=None,
         valid_data_path=data_path,
-        file_glob_pattern=file_glob_pattern,
     )
     datamodule.setup(stage="predict")
     dataloader = datamodule.predict_dataloader()
-    return dataloader
+    return dataloader, datamodule
 
 def main(cfg, vartype, ckpt_path: str, data_path: str, results_dir: str, file_glob_pattern: str='*.nc'):
     setup()
 
     model: torch.nn.Module = get_model(cfg, vartype, ckpt_singular=ckpt_path)
-    dataloader: torch.utils.data.DataLoader = get_data(
-        data_path=data_path, file_glob_pattern=file_glob_pattern
-    )
+    dataloader, val_dataset = get_data(
+        data_path=data_path)
 
-    # Pre-allocate an xarray.DataArray to store results
-    da_results: xr.DataArray = xr.full_like(other=dataloader.dataset.ds.isel(odim=slice(0, model.module.decoder.final_conv.out_channels)).output,fill_value=np.NaN,)
-    # assert da_results.sizes == {"time": 744, "odim": 42, "lat": 64, "lon": 128}
-
+    patch_outputs = []  # to store output from each patch inference.
     # Main prediction loop
     total: int = len(dataloader)
     pbar = tqdm.tqdm(iterable=enumerate(dataloader), total=total)
@@ -97,37 +197,43 @@ def main(cfg, vartype, ckpt_path: str, data_path: str, results_dir: str, file_gl
             k: v.to(device="cuda") for k, v in batch.items()
         }  # move data to the same device as the model
 
-        with torch.no_grad():
+        with torch.inference_mode():
             output: torch.Tensor = model(batch)  # run inference
-            # assert output.shape == torch.Size([8, 366, 64, 128])
-
-            # Save input and output tensors to Pytorch format
-            # torch.save(output, os.path.join(results_dir, f"output_{i}.pt"))
-            # torch.save(batch, os.path.join(results_dir, f"input_batch_{i}.pt"))
-
-            # Save output to NetCDF
-            t_start: int = i * dataloader.batch_size
-            t_stop: int = t_start + dataloader.batch_size
-            t_slice = slice(t_start, t_stop)
-            da_results[dict(time=t_slice)] = xr.DataArray(
-                data=output.cpu(),
-                dims=da_results.dims,
-                coords=da_results.isel(time=t_slice).coords,
-            )
-            if i % 20 == 0 or i == total - 1:  # Output to NetCDF every 20 steps
-                da_results.to_netcdf(
-                    path=os.path.join(results_dir, "output.nc"),
-                    mode="w",  # always rewrite file
-                )
-
+            print("Output shape:", output.shape) # [1, 500, 64, 128]
+            unnormalized_preds = val_dataset.scale_species_distribution(output.clone(), unnormalize=True)
+            patch_outputs.append(unnormalized_preds)
             # Report loss
             loss: torch.Tensor = F.mse_loss(input=output, target=batch["target"])
             pbar.set_postfix(
                 ordered_dict={
-                    "t_slice": f"{t_slice.start}-{t_slice.stop}",  # time slice
+                    # "t_slice": f"{t_slice.start}-{t_slice.stop}",  # time slice
                     "loss": loss.item(),
                 }
             )
+
+    lat_full = batch["lat_original"].cpu().numpy()  # Expected shape: (152,)
+    lon_full = batch["lon_original"].cpu().numpy()    # Expected shape: (320,)
+    
+    # Specify anchor settings (should match those used during patchification).
+    vertical_anchor = "center"
+    horizontal_anchor = "center"
+    lat_ascending = True
+
+    # Stitch the 4 patch outputs and plot the stitched prediction overlay.
+    if len(patch_outputs) == 4:
+        # Now stitch and plot the predictions.
+        stitched_data, row_start, col_start = stitch_and_plot(
+            patch_outputs, lat_full, lon_full,
+            vertical_anchor=vertical_anchor,
+            horizontal_anchor=horizontal_anchor,
+            lat_ascending=lat_ascending,
+            patch_lat_size=64,
+            patch_lon_size=128
+        )
+    else:
+        print("Warning: Expected 4 patches for stitching but got", len(patch_outputs))
+
+    return output
 
 
 # %%
@@ -141,15 +247,15 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--ckpt_path",
-        default="checkpoints/uvtp122/magnet-flux-uvtp122-epoch-06-loss-0.2274.pt",
+        default="/home/thanasis.trantas/github_projects/gravity_wave_finetuning/weight_checkpoints/species_distributions_best.pt",
     )    
     parser.add_argument(
         "--data_path",
-        default="gravity_wave_flux/uvtp122",
+        default="data_patched/val",
     )
     parser.add_argument(
         "--results_dir",
-        default="results/uvtp122",
+        default="results/species_distributions",
     )
     args = parser.parse_args()
 
@@ -158,5 +264,5 @@ if __name__ == "__main__":
 
     cfg = get_cfg()
     os.makedirs(name=args.results_dir, exist_ok=True)
-    main(cfg,args.split, args.ckpt_path, args.data_path, args.results_dir,)
+    main(cfg,args.split, args.ckpt_path, args.data_path, Path(args.results_dir),)
     cleanup()
