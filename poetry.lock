@@ -261,25 +261,6 @@ doc = ["sphinx (>=7.1.2,<7.2)", "sphinx-autodoc-typehints", "sphinx_rtd_theme"]
 test = ["coverage[toml]", "ddt (>=1.1.1,!=1.4.3)", "mock ; python_version < \"3.8\"", "mypy", "pre-commit", "pytest (>=7.3.1)", "pytest-cov", "pytest-instafail", "pytest-mock", "pytest-sugar", "typing-extensions ; python_version < \"3.11\""]
 
 [[package]]
-name = "h5netcdf"
-version = "1.6.1"
-description = "netCDF4 via h5py"
-optional = false
-python-versions = ">=3.9"
-groups = ["main"]
-files = [
-    {file = "h5netcdf-1.6.1-py3-none-any.whl", hash = "sha256:1ec75cabd6ab50c6e7109d0c6595eb2960ba0e79fef2257607ab80838d84e6f6"},
-    {file = "h5netcdf-1.6.1.tar.gz", hash = "sha256:7ef4ecd811374d94d29ac5e7f7db71ff59b55ef8eeefbe4ccc2c316853d31894"},
-]
-
-[package.dependencies]
-h5py = "*"
-packaging = "*"
-
-[package.extras]
-test = ["netCDF4", "pytest"]
-
-[[package]]
 name = "h5py"
 version = "3.13.0"
 description = "Read and write HDF5 files from Python"
@@ -317,42 +298,6 @@ files = [
 
 [package.dependencies]
 numpy = ">=1.19.3"
-
-[[package]]
-name = "huggingface-hub"
-version = "0.30.2"
-description = "Client library to download and publish models, datasets and other repos on the huggingface.co hub"
-optional = false
-python-versions = ">=3.8.0"
-groups = ["main"]
-files = [
-    {file = "huggingface_hub-0.30.2-py3-none-any.whl", hash = "sha256:68ff05969927058cfa41df4f2155d4bb48f5f54f719dd0390103eefa9b191e28"},
-    {file = "huggingface_hub-0.30.2.tar.gz", hash = "sha256:9a7897c5b6fd9dad3168a794a8998d6378210f5b9688d0dfc180b1a228dc2466"},
-]
-
-[package.dependencies]
-filelock = "*"
-fsspec = ">=2023.5.0"
-packaging = ">=20.9"
-pyyaml = ">=5.1"
-requests = "*"
-tqdm = ">=4.42.1"
-typing-extensions = ">=3.7.4.3"
-
-[package.extras]
-all = ["InquirerPy (==0.3.4)", "Jinja2", "Pillow", "aiohttp", "fastapi", "gradio (>=4.0.0)", "jedi", "libcst (==1.4.0)", "mypy (==1.5.1)", "numpy", "pytest (>=8.1.1,<8.2.2)", "pytest-asyncio", "pytest-cov", "pytest-env", "pytest-mock", "pytest-rerunfailures", "pytest-vcr", "pytest-xdist", "ruff (>=0.9.0)", "soundfile", "types-PyYAML", "types-requests", "types-simplejson", "types-toml", "types-tqdm", "types-urllib3", "typing-extensions (>=4.8.0)", "urllib3 (<2.0)"]
-cli = ["InquirerPy (==0.3.4)"]
-dev = ["InquirerPy (==0.3.4)", "Jinja2", "Pillow", "aiohttp", "fastapi", "gradio (>=4.0.0)", "jedi", "libcst (==1.4.0)", "mypy (==1.5.1)", "numpy", "pytest (>=8.1.1,<8.2.2)", "pytest-asyncio", "pytest-cov", "pytest-env", "pytest-mock", "pytest-rerunfailures", "pytest-vcr", "pytest-xdist", "ruff (>=0.9.0)", "soundfile", "types-PyYAML", "types-requests", "types-simplejson", "types-toml", "types-tqdm", "types-urllib3", "typing-extensions (>=4.8.0)", "urllib3 (<2.0)"]
-fastai = ["fastai (>=2.4)", "fastcore (>=1.3.27)", "toml"]
-hf-transfer = ["hf-transfer (>=0.1.4)"]
-hf-xet = ["hf-xet (>=0.1.4)"]
-inference = ["aiohttp"]
-quality = ["libcst (==1.4.0)", "mypy (==1.5.1)", "ruff (>=0.9.0)"]
-tensorflow = ["graphviz", "pydot", "tensorflow"]
-tensorflow-testing = ["keras (<3.0)", "tensorflow"]
-testing = ["InquirerPy (==0.3.4)", "Jinja2", "Pillow", "aiohttp", "fastapi", "gradio (>=4.0.0)", "jedi", "numpy", "pytest (>=8.1.1,<8.2.2)", "pytest-asyncio", "pytest-cov", "pytest-env", "pytest-mock", "pytest-rerunfailures", "pytest-vcr", "pytest-xdist", "soundfile", "urllib3 (<2.0)"]
-torch = ["safetensors[torch]", "torch"]
-typing = ["types-PyYAML", "types-requests", "types-simplejson", "types-toml", "types-tqdm", "types-urllib3", "typing-extensions (>=4.8.0)"]
 
 [[package]]
 name = "idna"
@@ -878,34 +823,26 @@ type = ["mypy (>=1.14.1)"]
 
 [[package]]
 name = "PrithviWxC"
-version = "1.0.0"
+version = "0.1.0"
 description = "Prithvi-WxC - Weather and climate foundational model."
 optional = false
-python-versions = ">=3.10"
+python-versions = ">=3.11"
 groups = ["main"]
 files = []
-develop = false
+develop = true
 
 [package.dependencies]
-h5netcdf = ">=1.3.0"
 h5py = ">=3.3,<4.0"
-huggingface_hub = ">=0.25"
 numpy = ">=1.26,<2.0"
-packaging = ">=24.0"
-pandas = "*"
-pyyaml = ">=6.0,<7.0"
+pandas = ">=2.2,<3.0"
 torch = ">=2.2"
-tqdm = ">=4.66.4"
-xarray = ">=2024.3.0"
 
 [package.extras]
-examples = ["jupyterlab (>=4.2.0)", "matplotlib (>=3.8)"]
+examples = ["matplotlib (>=3.8)", "notebook (>=7.2,<8.0)"]
 
 [package.source]
-type = "git"
-url = "https://github.com/NASA-IMPACT/Prithvi-WxC.git"
-reference = "HEAD"
-resolved_reference = "c1984e3922861d9d29ec3a6c9b9f422896a57235"
+type = "directory"
+url = "Prithvi-WxC"
 
 [[package]]
 name = "protobuf"
@@ -1686,4 +1623,4 @@ PyYAML = "*"
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12"
-content-hash = "750cffa58fb4ac5c95b56bcaad6ed1efa118e6a0c4f0c7253473f2f6851f41e3"
+content-hash = "dc6ccb6b86bd2aa11a65aaf1c51babb37fa4b126f97fc51692afbeaa47459f66"

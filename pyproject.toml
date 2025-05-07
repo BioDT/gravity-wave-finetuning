@@ -7,17 +7,22 @@ authors = [
 ]
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = [
-    "yacs (>=0.1.8,<0.2.0)",
-    "torch (>=2.7.0,<3.0.0)",
-    "xarray (>=2025.4.0,<2026.0.0)",
-    "wandb (>=0.19.10,<0.20.0)",
-    "tqdm (>=4.67.1,<5.0.0)",
-    "PrithviWxC @ git+https://github.com/NASA-IMPACT/Prithvi-WxC.git",
-]
+# dependencies = [
+#     "yacs (>=0.1.8,<0.2.0)",
+#     "torch (>=2.7.0,<3.0.0)",
+#     "xarray (>=2025.4.0,<2026.0.0)",
+#     "wandb (>=0.19.10,<0.20.0)",
+#     "tqdm (>=4.67.1,<5.0.0)",
+#     "PrithviWxC @ git+https://github.com/NASA-IMPACT/Prithvi-WxC.git",
+# ]
 
 [tool.poetry.dependencies]
-# PrithviWxC = { path = "./Prithvi-WxC/", develop = true }
+yacs = ">=0.1.8,<0.2.0"
+torch = ">=2.7.0,<3.0.0"
+xarray = ">=2025.4.0,<2026.0.0"
+wandb = ">=0.19.10,<0.20.0"
+tqdm = ">=4.67.1,<5.0.0"
+PrithviWxC = { path = "./Prithvi-WxC/", develop = true }
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
