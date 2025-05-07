@@ -4,11 +4,12 @@ import argparse
 import torch
 import tqdm
 import wandb
-from datamodule import ERA5DataModule
-from gravity_wave_model import UNetWithTransformer
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
-from distributed import print0
+
+from gravity_wave_finetuning.datamodule import ERA5DataModule
+from gravity_wave_finetuning.gravity_wave_model import UNetWithTransformer
+from gravity_wave_finetuning.distributed import print0
 
 local_rank = int(os.environ["LOCAL_RANK"])
 global_rank = int(os.environ["RANK"])

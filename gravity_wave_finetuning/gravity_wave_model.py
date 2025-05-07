@@ -4,7 +4,7 @@ import torch.nn as nn
 import importlib
 model = importlib.import_module('Prithvi-WxC.PrithviWxC.model')
 
-from distributed import print0
+from gravity_wave_finetuning.distributed import print0
 
 torch.set_float32_matmul_precision("high")
 

@@ -7,10 +7,11 @@ import torch.nn.functional as F
 import tqdm
 import xarray as xr
 
-from datamodule import ERA5DataModule
-from gravity_wave_model import UNetWithTransformer
 from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.distributed as dist
+
+from gravity_wave_finetuning.datamodule import ERA5DataModule
+from gravity_wave_finetuning.gravity_wave_model import UNetWithTransformer
 
 local_rank = int(os.environ["LOCAL_RANK"])
 rank = int(os.environ["RANK"])
